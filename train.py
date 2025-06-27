@@ -731,15 +731,11 @@ if __name__ == '__main__':
         try:
             if hasattr(train_dataloader, 'get_current_micro_batch_files'):
                 current_files = train_dataloader.get_current_micro_batch_files()
-                if is_main_process() and debug_config.get('enabled', False):
-                    print(f"[TRAIN] Step {step}: Retrieved {len(current_files)} files from dataloader")
         except Exception as e:
-            if is_main_process() and debug_config.get('enabled', False):
+            if is_main_process():
                 print(f"[TRAIN] Failed to get current micro batch files: {e}")
         
         # LossDebuggerにログ記録
-        if is_main_process() and debug_config.get('enabled', False) and step % 10 == 0:
-            print(f"[DEBUG] Step {step}: current_files = {current_files}")
         loss_debugger.log_loss(loss, step, current_files)
         
         epoch_loss += loss
