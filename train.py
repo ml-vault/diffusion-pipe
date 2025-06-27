@@ -30,6 +30,7 @@ from utils.isolate_rng import isolate_rng
 from utils.patches import apply_patches
 from utils.unsloth_utils import unsloth_checkpoint
 from utils.pipeline import ManualPipelineModule
+from utils.loss_debugger import LossDebugger
 
 wandb_enable = False
 
@@ -699,6 +700,17 @@ if __name__ == '__main__':
     epoch = train_dataloader.epoch
     tb_writer = SummaryWriter(log_dir=run_dir) if is_main_process() else None
     saver = utils.saver.Saver(args, config, is_adapter, run_dir, model, train_dataloader, model_engine, pipeline_model)
+    
+    # LossDebuggerの初期化
+    debug_config = config.get('debug', {})
+    loss_debugger = LossDebugger(
+        enabled=debug_config.get('enabled', False),
+        loss_threshold=debug_config.get('loss_threshold', 10.0),
+        max_history=debug_config.get('max_history', 1000),
+        output_dir=os.path.join(run_dir, 'debug') if debug_config.get('enabled', False) else None,
+        alert_frequency=debug_config.get('alert_frequency', 10),
+        save_frequency=debug_config.get('save_frequency', 100)
+    )
 
     disable_block_swap_for_eval = config.get('disable_block_swap_for_eval', False)
     if config['eval_before_first_step'] and not resume_from_checkpoint:
@@ -711,7 +723,39 @@ if __name__ == '__main__':
         #empty_cuda_cache()
         model_engine.reset_activation_shape()
         iterator = get_data_iterator_for_step(train_dataloader, model_engine)
+        
+        # デバッグ: バッチデータ構造の詳細調査とファイル情報の保持
+        batch_data = {}
+        current_batch_files = []
+        if iterator is not None and debug_config.get('enabled', False):
+            try:
+                # iteratorの最初のバッチを取得してデバッグ出力
+                iterator_list = list(iterator)
+                if iterator_list:
+                    first_batch = iterator_list[0]
+                    batch_data = first_batch
+                    # iteratorを再作成
+                    iterator = iter(iterator_list)
+            except Exception as e:
+                if is_main_process():
+                    print(f"[DEBUG] Error extracting batch data: {e}")
+        
         loss = model_engine.train_batch(iterator).item()
+        
+        # 現在のマイクロバッチのファイル情報を取得
+        current_files = []
+        try:
+            if hasattr(train_dataloader, 'get_current_micro_batch_files'):
+                current_files = train_dataloader.get_current_micro_batch_files()
+                if is_main_process() and debug_config.get('enabled', False):
+                    print(f"[TRAIN] Step {step}: Retrieved {len(current_files)} files from dataloader")
+        except Exception as e:
+            if is_main_process() and debug_config.get('enabled', False):
+                print(f"[TRAIN] Failed to get current micro batch files: {e}")
+        
+        # LossDebuggerにログ記録（引数順序を修正）
+        loss_debugger.log_loss(loss, step, batch_data, tb_writer, current_files)
+        
         epoch_loss += loss
         num_steps += 1
         train_dataloader.sync_epoch()
@@ -756,3 +800,6 @@ if __name__ == '__main__':
 
     if is_main_process():
         print('TRAINING COMPLETE!')
+        
+    # LossDebuggerの最終処理
+    loss_debugger.finalize()

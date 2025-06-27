@@ -1,0 +1,51 @@
+# I2V LoRAトレーニング用デバッグ設定例
+# この設定を既存のconfig.tomlファイルに追加してください。
+
+# デバッグ機能の設定
+[debug]
+# デバッグ機能を有効にする（メインプロセスでのみ動作）
+enabled = true
+
+# アラートを発生させるloss閾値
+# この値を超えるlossが発生した場合、警告ログが出力される
+loss_threshold = 10.0
+
+# メモリに保持する最大履歴数
+# メモリ効率のためdequeを使用し、この数を超えると古いデータから削除される
+max_history = 1000
+
+# アラートの最大頻度（ステップ数）
+# 同じ頻度でアラートが発生しすぎないよう制御する
+alert_frequency = 10
+
+# JSONファイル保存頻度（ステップ数）
+# この間隔でデバッグデータがJSONファイルに保存される
+save_frequency = 100
+
+# 使用例:
+# 1. 基本的な使用（最低限の設定）
+# [debug]
+# enabled = true
+# loss_threshold = 5.0
+
+# 2. メモリ使用量を抑えたい場合
+# [debug]
+# enabled = true
+# loss_threshold = 10.0
+# max_history = 500
+# save_frequency = 200
+
+# 3. 詳細なデバッグを行いたい場合
+# [debug]
+# enabled = true
+# loss_threshold = 8.0
+# max_history = 2000
+# alert_frequency = 5
+# save_frequency = 50
+
+# 注意事項:
+# - デバッグ機能はメインプロセス（rank 0）でのみ動作します
+# - enabled = false または設定を削除すると、デバッグ機能は無効になります
+# - 出力ファイルは {output_dir}/debug/ ディレクトリに保存されます
+# - パフォーマンスへの影響を最小限に抑えるよう設計されていますが、
+#   頻繁な保存（低いsave_frequency）はI/Oオーバーヘッドを増加させる可能性があります

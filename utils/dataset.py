@@ -920,6 +920,9 @@ class PipelineDataLoader:
         self.num_batches_pulled = 0
         self.next_micro_batch = None
         self.recreate_dataloader = False
+        # ファイル情報を保持するためのキュー（デバッグ用）
+        self.current_batch_files = []
+        self.micro_batch_counter = 0
         # Be careful to only create the DataLoader some bounded number of times: https://github.com/pytorch/pytorch/issues/91252
         self._create_dataloader()
         self.data = self._pull_batches_from_dataloader()
@@ -972,6 +975,9 @@ class PipelineDataLoader:
 
     def _pull_batches_from_dataloader(self):
         for batch in self.dataloader:
+            # バッチからファイル情報を抽出（prepare_inputs前に実行）
+            batch_files = self._extract_file_info_from_batch(batch)
+            
             features, label = self.model.prepare_inputs(batch, timestep_quantile=self.eval_quantile)
             target, mask = label
             # The target depends on the noise, so we must broadcast it from the first stage to the last.
@@ -980,8 +986,84 @@ class PipelineDataLoader:
             target = self._broadcast_target(target)
             label = (target, mask)
             self.num_batches_pulled += 1
-            for micro_batch in split_batch((features, label), self.gradient_accumulation_steps):
+            
+            # マイクロバッチごとにファイル情報を保持
+            micro_batches = list(split_batch((features, label), self.gradient_accumulation_steps))
+            self.current_batch_files = self._distribute_files_to_micro_batches(batch_files, len(micro_batches))
+            self.micro_batch_counter = 0
+            
+            for micro_batch in micro_batches:
                 yield micro_batch
+                self.micro_batch_counter += 1
+    
+    def _extract_file_info_from_batch(self, batch):
+        """バッチからファイル情報を抽出"""
+        try:
+            # デバッグ情報
+            from utils.common import is_main_process
+            
+            if isinstance(batch, dict):
+                
+                # 複数の可能性のあるキー名を試行
+                possible_keys = ['image_file', 'image_files', 'file', 'files', 'image_path', 'image_paths']
+                
+                for key in possible_keys:
+                    if key in batch:
+                        files = batch[key]
+                        
+                        if isinstance(files, (list, tuple)):
+                            result = list(files)
+                            return result
+                        else:
+                            result = [files]
+                            return result
+            
+            elif isinstance(batch, (list, tuple)):
+                
+                # リスト内の各要素をチェック
+                for i, item in enumerate(batch):
+                    if isinstance(item, dict):
+                        # 辞書要素から再帰的に抽出
+                        files = self._extract_file_info_from_batch(item)
+                        if files:
+                            return files
+            return []
+            
+        except Exception as e:
+            if is_main_process():
+                print(f"[_extract_file_info_from_batch] Error: {e}")
+            return []
+    
+    def _distribute_files_to_micro_batches(self, batch_files, num_micro_batches):
+        """ファイル情報をマイクロバッチに分散"""
+        if not batch_files or num_micro_batches <= 0:
+            return []
+        
+        # ファイル数をマイクロバッチ数で分割
+        files_per_micro_batch = len(batch_files) // num_micro_batches
+        remainder = len(batch_files) % num_micro_batches
+        
+        distributed_files = []
+        start_idx = 0
+        
+        for i in range(num_micro_batches):
+            # 余りがある場合は最初のマイクロバッチに追加
+            batch_size = files_per_micro_batch + (1 if i < remainder else 0)
+            end_idx = start_idx + batch_size
+            distributed_files.append(batch_files[start_idx:end_idx])
+            start_idx = end_idx
+        
+        return distributed_files
+    
+    def get_current_micro_batch_files(self):
+        """現在のマイクロバッチのファイル情報を取得"""
+        try:
+            if (self.current_batch_files and
+                0 <= self.micro_batch_counter < len(self.current_batch_files)):
+                return self.current_batch_files[self.micro_batch_counter]
+            return []
+        except Exception as e:
+            return []
 
     def _broadcast_target(self, target):
         model_engine = self.model_engine
