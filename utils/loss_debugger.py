@@ -79,8 +79,6 @@ class LossDebugger:
         self,
         loss: float,
         step: int,
-        batch_data: Union[Dict[str, Any], tuple, Any],
-        tb_writer: Optional[Any] = None,
         current_files: Optional[List[str]] = None
     ) -> None:
         """
@@ -89,8 +87,6 @@ class LossDebugger:
         Args:
             loss: 計算されたloss値
             step: 現在のトレーニングステップ
-            batch_data: バッチデータ（辞書形式またはタプル形式）
-            tb_writer: TensorBoardライター（オプション）
             current_files: 現在のバッチのファイル情報（オプション）
         """
         if not self.enabled:
@@ -99,21 +95,9 @@ class LossDebugger:
         try:
             self.step_count = step
             
-            # ファイル名を取得（複数の方法を試行）
-            image_files = []
-            
-            # 1. 直接渡されたファイル情報を優先
-            if current_files:
-                image_files = current_files
-                self.logger.debug(f"Using provided file list: {len(image_files)} files")
-            
-            # 2. バッチデータからの抽出を試行
-            if not image_files:
-                image_files = self._extract_image_files(batch_data)
-                if image_files:
-                    self.logger.debug(f"Extracted from batch data: {len(image_files)} files")
-                else:
-                    self.logger.debug("No files extracted from batch data")
+            # ファイル名を取得
+            image_files = current_files if current_files else []
+            self.logger.debug(f"Using provided file list: {len(image_files)} files")
             
             # 履歴に追加
             record = {
@@ -131,10 +115,6 @@ class LossDebugger:
             if loss > self.loss_threshold:
                 self._handle_high_loss_alert(loss, step, image_files)
             
-            # TensorBoard統合
-            if tb_writer:
-                self._log_to_tensorboard(tb_writer, loss, step, image_files)
-            
             # 定期的なJSON保存
             if step % self.save_frequency == 0:
                 self._save_to_json()
@@ -142,89 +122,6 @@ class LossDebugger:
         except Exception as e:
             self.logger.error(f"Error in log_loss: {e}")
     
-    def _extract_image_files(self, batch_data: Union[Dict[str, Any], tuple, Any]) -> List[str]:
-        """バッチデータからimage_fileリストを抽出
-        
-        Args:
-            batch_data: 辞書形式またはタプル形式のバッチデータ
-            
-        Returns:
-            抽出されたファイル名のリスト（空リストの場合もあり）
-        """
-        try:
-            if not batch_data:
-                self.logger.debug("[LossDebugger] Empty batch_data provided")
-                return []
-            
-            # デバッグ情報を出力
-            self.logger.info(f"[LossDebugger] Batch data type: {type(batch_data)}")
-            
-            # 辞書形式の場合
-            if isinstance(batch_data, dict):
-                self.logger.info(f"[LossDebugger] Batch data keys: {list(batch_data.keys())}")
-                
-                # 複数の可能性のあるキー名を試行
-                possible_keys = ['image_file', 'image_files', 'file', 'files', 'image_path', 'image_paths']
-                
-                for key in possible_keys:
-                    if key in batch_data:
-                        files = batch_data[key]
-                        self.logger.info(f"[LossDebugger] Found files under key '{key}': {type(files)}")
-                        
-                        if isinstance(files, torch.Tensor):
-                            # Tensor の場合は文字列に変換
-                            try:
-                                if files.numel() == 0:
-                                    self.logger.info("[LossDebugger] Empty tensor found")
-                                    return []
-                                result = [str(f) for f in files.tolist()]
-                                self.logger.info(f"[LossDebugger] Extracted {len(result)} files from tensor")
-                                return result
-                            except Exception as tensor_e:
-                                self.logger.warning(f"[LossDebugger] Failed to convert tensor: {tensor_e}")
-                                return []
-                        elif isinstance(files, (list, tuple)):
-                            result = [str(f) for f in files if f is not None]
-                            self.logger.info(f"[LossDebugger] Extracted {len(result)} files from list/tuple")
-                            return result
-                        else:
-                            result = [str(files)] if files is not None else []
-                            self.logger.info(f"[LossDebugger] Extracted single file: {result[0] if result else 'None'}")
-                            return result
-                
-                # ファイル関連のキーが見つからない場合
-                self.logger.info(f"[LossDebugger] No file-related keys found in batch data. Available keys: {list(batch_data.keys())}")
-                return []
-            
-            # タプル形式の場合 (features, label)
-            elif isinstance(batch_data, tuple):
-                self.logger.info(f"[LossDebugger] Tuple batch data with length: {len(batch_data)}")
-                
-                # タプル形式でも、各要素を再帰的にチェック
-                for i, item in enumerate(batch_data):
-                    self.logger.debug(f"[LossDebugger] Checking tuple item {i}: {type(item)}")
-                    if isinstance(item, dict):
-                        files = self._extract_image_files(item)
-                        if files:
-                            self.logger.info(f"[LossDebugger] Found files in tuple item {i}")
-                            return files
-                
-                self.logger.info("[LossDebugger] Tuple format batch detected. No file information found.")
-                return []
-            
-            # その他の形式
-            else:
-                self.logger.info(f"[LossDebugger] Unsupported batch data type: {type(batch_data)}")
-                return []
-            
-        except Exception as e:
-            self.logger.warning(f"[LossDebugger] Failed to extract image_files: {e}")
-            self.logger.debug(f"[LossDebugger] Batch data type: {type(batch_data)}")
-            if hasattr(batch_data, 'keys'):
-                self.logger.debug(f"[LossDebugger] Keys: {list(batch_data.keys())}")
-            elif isinstance(batch_data, (tuple, list)):
-                self.logger.debug(f"[LossDebugger] Length: {len(batch_data)}")
-            return []
     
     def _update_file_stats(self, image_files: List[str], loss: float) -> None:
         """ファイル別統計を更新"""
@@ -268,44 +165,6 @@ class LossDebugger:
         
         self.logger.warning(alert_msg)
         ds_logger.warning(alert_msg)
-    
-    def _log_to_tensorboard(
-        self,
-        tb_writer: Any,
-        loss: float,
-        step: int,
-        image_files: List[str]
-    ) -> None:
-        """TensorBoardに追加のデバッグ情報をログ"""
-        try:
-            # 基本的なloss統計
-            if len(self.loss_history) > 1:
-                recent_losses = [r['loss'] for r in list(self.loss_history)[-10:]]
-                avg_recent_loss = sum(recent_losses) / len(recent_losses)
-                tb_writer.add_scalar('debug/recent_avg_loss', avg_recent_loss, step)
-            
-            # 閾値を超えた回数
-            high_loss_count = sum(1 for r in self.loss_history if r['loss'] > self.loss_threshold)
-            tb_writer.add_scalar('debug/high_loss_count', high_loss_count, step)
-            
-            # ファイル別統計のトップ5（最大loss）
-            if self.file_loss_stats:
-                top_files = sorted(
-                    self.file_loss_stats.items(),
-                    key=lambda x: x[1]['max_loss'],
-                    reverse=True
-                )[:5]
-                
-                for i, (file_path, stats) in enumerate(top_files):
-                    file_name = Path(file_path).stem[:20]  # ファイル名を短縮
-                    tb_writer.add_scalar(
-                        f'debug/top_loss_files/max_loss_{i+1}_{file_name}',
-                        stats['max_loss'],
-                        step
-                    )
-                    
-        except Exception as e:
-            self.logger.warning(f"TensorBoard logging failed: {e}")
     
     def _save_to_json(self) -> None:
         """現在の統計をJSONファイルに保存"""

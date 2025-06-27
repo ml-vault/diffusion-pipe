@@ -724,22 +724,6 @@ if __name__ == '__main__':
         model_engine.reset_activation_shape()
         iterator = get_data_iterator_for_step(train_dataloader, model_engine)
         
-        # デバッグ: バッチデータ構造の詳細調査とファイル情報の保持
-        batch_data = {}
-        current_batch_files = []
-        if iterator is not None and debug_config.get('enabled', False):
-            try:
-                # iteratorの最初のバッチを取得してデバッグ出力
-                iterator_list = list(iterator)
-                if iterator_list:
-                    first_batch = iterator_list[0]
-                    batch_data = first_batch
-                    # iteratorを再作成
-                    iterator = iter(iterator_list)
-            except Exception as e:
-                if is_main_process():
-                    print(f"[DEBUG] Error extracting batch data: {e}")
-        
         loss = model_engine.train_batch(iterator).item()
         
         # 現在のマイクロバッチのファイル情報を取得
@@ -753,8 +737,10 @@ if __name__ == '__main__':
             if is_main_process() and debug_config.get('enabled', False):
                 print(f"[TRAIN] Failed to get current micro batch files: {e}")
         
-        # LossDebuggerにログ記録（引数順序を修正）
-        loss_debugger.log_loss(loss, step, batch_data, tb_writer, current_files)
+        # LossDebuggerにログ記録
+        if is_main_process() and debug_config.get('enabled', False) and step % 10 == 0:
+            print(f"[DEBUG] Step {step}: current_files = {current_files}")
+        loss_debugger.log_loss(loss, step, current_files)
         
         epoch_loss += loss
         num_steps += 1
